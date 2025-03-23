@@ -16,3 +16,15 @@
 
 ### Updates [dd/mm/yy]
 - [07/03/25] Code release happening soon! (ETA ~2/3 weeks 😊)
+
+
+### Citation  
+Please cite this work as follows if you find it useful!
+```bibtex
+@article{farina2025rethinking,
+  title={Rethinking Few-Shot Adaptation of Vision-Language Models in Two Stages},
+  author={Farina, Matteo and Mancini, Massimiliano and Iacca, Giovanni and Ricci, Elisa},
+  journal={arXiv preprint arXiv:2503.11609},
+  year={2025}
+}
+```
