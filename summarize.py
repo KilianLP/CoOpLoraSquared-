@@ -18,8 +18,6 @@ from argparse import ArgumentParser
 
 def parse_path(path: Path):
     df = pd.read_csv(path)
-    if 'acc_test_novel' in df.columns:
-        df['acc_test_new'] = df['acc_test_novel']
     return df
 
 
