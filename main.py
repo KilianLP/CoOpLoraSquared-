@@ -13,7 +13,7 @@ from fs.utils import dump
 
 # helper message from the '--mode' argument to parse
 MODE_HELPER = "Choose which experiment to run. Choices are:"
-MODE_HELPER += "\t 1. 'lora': will run CLIP-LoRA as per https://arxiv.org/abs/2405.18541;"
+MODE_HELPER += "\t 1. 'cliplora': will run CLIP-LoRA as per https://arxiv.org/abs/2405.18541;"
 MODE_HELPER += "\t 2. 'ln_only': will do FSA by only tuning layer-normalization instances according to --ln_modality and --norm_start;"
 MODE_HELPER += "\t 3. (default) 'twostage': will run 2SFS, and you can customize it with the --peft, --n_iters and --n_iters_frac arguments;"
 
