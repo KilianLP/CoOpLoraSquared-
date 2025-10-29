@@ -86,7 +86,17 @@ def get_arguments():
     parser.add_argument('--dropout_rate', default=0.25, type=float, help='dropout rate applied before the LoRA module')
     parser.add_argument('--save_path', default=None, help='path to save the lora modules after training, not saved if None')
     parser.add_argument('--filename', default='lora_weights', help='file name to save the lora weights (.pt extension will be added)')
-    
+    parser.add_argument('--lora_variant', type=str, default='standard', choices=['standard', 'squared'],
+                        help="Choose between the standard LoRA modules or the shared+expert LoRA^2 adapters.")
+    parser.add_argument('--lora_shared_rank', type=int, default=2,
+                        help="Rank for the shared branch when using LoRA^2 (ignored otherwise).")
+    parser.add_argument('--lora_expert_rank', type=int, default=0,
+                        help="Rank for each expert branch when using LoRA^2 (ignored if 0).")
+    parser.add_argument('--lora_num_experts', type=int, default=0,
+                        help="Number of expert branches to instantiate for LoRA^2 (ignored if expert rank is 0).")
+    parser.add_argument('--lora_active_expert', type=str, default=None,
+                        help="Expert id(s) to activate for LoRA^2. Accepts comma-separated indices, 'all', or 'none'.")
+
     args = parser.parse_args()
     return args
 

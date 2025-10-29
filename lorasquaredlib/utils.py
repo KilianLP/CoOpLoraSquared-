@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Sequence
+from typing import Iterable, List, Sequence, Union
 
 import torch
 import torch.nn as nn
@@ -360,3 +360,80 @@ def get_lorasquared_parameters(
         elif include_bias and "bias" in name:
             params.append(param)
     return params
+
+
+def resolve_expert_indices(
+    expert_value: Union[str, int, Iterable[int], torch.Tensor, None],
+    n_experts: int,
+) -> Union[None, int, List[int]]:
+    """
+    Normalize expert selection inputs to a consistent representation.
+
+    Returns:
+        None if no expert should be activated, an ``int`` if a single expert
+        is requested, or a list of ints for multiple experts.
+    """
+    if expert_value is None:
+        return None
+
+    if isinstance(expert_value, torch.Tensor):
+        if expert_value.numel() == 0:
+            return None
+        if expert_value.numel() == 1:
+            expert_value = int(expert_value.item())
+        else:
+            raise ValueError(
+                "Tensor-based expert selection must contain a single index."
+            )
+
+    if isinstance(expert_value, int):
+        _validate_indices([expert_value], n_experts)
+        return expert_value
+
+    if isinstance(expert_value, (list, tuple, set)):
+        indices = [int(idx) for idx in expert_value]
+        _validate_indices(indices, n_experts)
+        if not indices:
+            return None
+        return indices if len(indices) > 1 else indices[0]
+
+    if isinstance(expert_value, str):
+        value = expert_value.strip()
+        if value == "":
+            return None
+        lowered = value.lower()
+        if lowered in ("none", "null"):
+            return None
+        if lowered == "all":
+            indices = list(range(n_experts))
+            _validate_indices(indices, n_experts)
+            if not indices:
+                return None
+            return indices if len(indices) > 1 else indices[0]
+        parts = [part.strip() for part in value.split(",") if part.strip() != ""]
+        if len(parts) > 1:
+            indices = [int(part) for part in parts]
+            _validate_indices(indices, n_experts)
+            return indices
+        try:
+            index = int(value)
+        except ValueError as exc:
+            raise ValueError(
+                f"Unable to parse expert selection from '{expert_value}'."
+            ) from exc
+        _validate_indices([index], n_experts)
+        return index
+
+    index = int(expert_value)
+    _validate_indices([index], n_experts)
+    return index
+
+
+def _validate_indices(indices: List[int], n_experts: int) -> None:
+    for idx in indices:
+        if idx < 0:
+            raise ValueError(f"Expert index {idx} must be non-negative.")
+        if n_experts > 0 and idx >= n_experts:
+            raise ValueError(
+                f"Expert index {idx} is out of range for {n_experts} experts."
+            )
