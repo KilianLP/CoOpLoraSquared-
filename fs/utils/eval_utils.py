@@ -3,6 +3,8 @@ import clip
 import torch
 import os.path as osp
 
+from lorasquaredlib import set_active_expert_for_layers
+
 
 def cls_acc(output, target, topk=1):
     pred = output.topk(topk, 1, True, True)[1].t()
@@ -71,8 +73,15 @@ def zero_shot_eval(clip_model, dataset, loader, split="test"):
 
 
 @torch.no_grad()
-def evaluate(clip_model, loader, template, classnames):
+def evaluate(clip_model, loader, template, classnames, label_to_expert=None, use_expert=True):
     clip_model.eval()
+    layers = getattr(clip_model, "_lorasquared_layers", None)
+    if layers:
+        if use_expert and label_to_expert is not None:
+            class_expert_ids = label_to_expert.to(clip_model.logit_scale.device)
+        else:
+            class_expert_ids = None
+        set_active_expert_for_layers(layers, class_expert_ids)
     texts = tokenize_texts(template, classnames)
     with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
         class_embeddings = clip_model.encode_text(texts)
@@ -82,6 +91,13 @@ def evaluate(clip_model, loader, template, classnames):
     tot_samples = 0
     for i, (images, target) in enumerate(loader):
         images, target = images.cuda(), target.cuda()
+        if layers and use_expert:
+            if label_to_expert is not None:
+                lut = label_to_expert.to(target.device)
+                batch_expert_ids = lut[target]
+            else:
+                batch_expert_ids = target
+            set_active_expert_for_layers(layers, batch_expert_ids)
         with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
             image_features = clip_model.encode_image(images)
         image_features = image_features/image_features.norm(dim=-1, keepdim=True)
@@ -89,6 +105,8 @@ def evaluate(clip_model, loader, template, classnames):
         acc += cls_acc(cosine_similarity, target) * len(cosine_similarity)
         tot_samples += len(cosine_similarity)
     
+    if layers:
+        set_active_expert_for_layers(layers, None)
     acc /= tot_samples
     return acc
 

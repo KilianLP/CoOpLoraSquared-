@@ -9,7 +9,7 @@ import numpy as np
 # custom imports
 from datasets import build_dataset, build_dataloaders
 from fs import run_cliplora, run_ln_only, run_twostage
-from fs.utils import dump
+from fs.utils import dump, attach_expert_metadata
 
 # helper message from the '--mode' argument to parse
 MODE_HELPER = "Choose which experiment to run. Choices are:"
@@ -118,6 +118,7 @@ def main(args):
         setting=args.setting,
         seed=args.seed
     )
+    attach_expert_metadata(dataset)
 
     # create the dataloaders
     # NOTE: test_loader will be a tuple with both test_base and test_new loaders if we're evaluating the b2n setup

@@ -3,6 +3,42 @@ import torch.nn as nn
 import clip
 
 
+def attach_expert_metadata(dataset) -> None:
+    """
+    Build a consistent expert-id mapping across all dataset splits and
+    attach lookup tensors for quick conversion from labels to expert ids.
+    """
+    seen = {}
+    ordered = []
+
+    def register(names):
+        if names is None:
+            return
+        for name in names:
+            if name not in seen:
+                seen[name] = len(ordered)
+                ordered.append(name)
+
+    register(getattr(dataset, "classnames", None))
+    register(getattr(dataset, "val_classnames", None))
+    register(getattr(dataset, "test_classnames", None))
+    register(getattr(dataset, "test_new_classnames", None))
+
+    dataset.classname_to_expert = seen
+    dataset.expert_classnames = ordered
+    dataset.num_experts = len(ordered)
+
+    def build_tensor(names):
+        if names is None:
+            return None
+        return torch.tensor([seen[name] for name in names], dtype=torch.long)
+
+    dataset.label_to_expert_train = build_tensor(getattr(dataset, "classnames", None))
+    dataset.label_to_expert_val = build_tensor(getattr(dataset, "val_classnames", None))
+    dataset.label_to_expert_test = build_tensor(getattr(dataset, "test_classnames", None))
+    dataset.label_to_expert_test_new = build_tensor(getattr(dataset, "test_new_classnames", None))
+
+
 def named_modules_with_index(clip_model: nn.Module):
     assert hasattr(clip_model, "visual") and hasattr(clip_model.visual, "transformer") and hasattr(clip_model, "transformer"), \
         "The model should have both vision and text transformer modules! RN not supported, implement it yourself :)"

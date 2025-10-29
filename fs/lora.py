@@ -11,17 +11,13 @@ from lorasquaredlib import (
     apply_lorasquared,
     mark_only_lorasquared_as_trainable,
     get_lorasquared_parameters,
-    resolve_expert_indices,
+    set_active_expert_for_layers,
 )
 from fs.utils.eval_utils import clip_classifier, cls_acc, evaluate
 
 
 def _set_active_expert(layers, expert_selection):
-    if layers is None:
-        return
-    for layer in layers:
-        if hasattr(layer, "set_active_expert"):
-            layer.set_active_expert(expert_selection)
+    set_active_expert_for_layers(layers, expert_selection)
 
 
 def run_lora(args, clip_model, logit_scale, dataset, train_loader, val_loader, test_loader):
@@ -30,11 +26,19 @@ def run_lora(args, clip_model, logit_scale, dataset, train_loader, val_loader, t
 
     # textual features of the training set
     textual_features = clip_classifier(dataset.classnames, dataset.template, clip_model)
-    
-    active_expert = None
 
     # plug LoRA layers
     if args.lora_variant == 'squared':
+        if not hasattr(dataset, "label_to_expert_train"):
+            raise ValueError("Dataset missing expert metadata for LoRA^2. Ensure attach_expert_metadata() is called.")
+        required_experts = getattr(dataset, "num_experts", None)
+        if args.lora_expert_rank <= 0:
+            raise ValueError("LoRA^2 requires --lora_expert_rank > 0.")
+        if required_experts is not None and args.lora_num_experts < required_experts:
+            raise ValueError(
+                f"LoRA^2 requires at least {required_experts} experts to cover all classes, "
+                f"but got {args.lora_num_experts}."
+            )
         list_lora_layers = apply_lorasquared(
             clip_model,
             backbone=args.backbone,
@@ -49,8 +53,7 @@ def run_lora(args, clip_model, logit_scale, dataset, train_loader, val_loader, t
             dropout_rate=args.dropout_rate,
             verbose=False
         )
-        active_expert = resolve_expert_indices(args.lora_active_expert, args.lora_num_experts)
-        _set_active_expert(list_lora_layers, active_expert)
+        _set_active_expert(list_lora_layers, None)
         mark_only_lorasquared_as_trainable(clip_model)
         trainable_params = get_lorasquared_parameters(clip_model)
     else:
@@ -81,12 +84,20 @@ def run_lora(args, clip_model, logit_scale, dataset, train_loader, val_loader, t
             template = dataset.template[0]
             texts = [template.format(classname.replace('_', ' ')) for classname in dataset.classnames]
             images, target = images.cuda(), target.cuda()
+            if args.lora_variant == 'squared' and (args.encoder == 'text' or args.encoder == 'both'):
+                class_experts = dataset.label_to_expert_train.to(images.device)
+                _set_active_expert(list_lora_layers, class_experts)
             if args.encoder == 'text' or args.encoder == 'both':
                 with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
                     texts = clip.tokenize(texts).cuda()
                     class_embeddings = clip_model.encode_text(texts)
                 text_features = class_embeddings/class_embeddings.norm(dim=-1, keepdim=True)
-                
+            
+            if args.lora_variant == 'squared':
+                expert_lut = dataset.label_to_expert_train.to(target.device)
+                sample_experts = expert_lut[target]
+                _set_active_expert(list_lora_layers, sample_experts)
+
             if args.encoder == 'vision' or args.encoder == 'both':
                 with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
                     image_features = clip_model.encode_image(images)
@@ -127,7 +138,14 @@ def run_lora(args, clip_model, logit_scale, dataset, train_loader, val_loader, t
         # Eval
         if VALIDATION:
             clip_model.eval()
-            acc_val = evaluate(clip_model, val_loader, template=dataset.template[0], classnames=dataset.val_classnames)
+            val_mapping = dataset.label_to_expert_val if args.lora_variant == 'squared' else None
+            acc_val = evaluate(
+                clip_model,
+                val_loader,
+                template=dataset.template[0],
+                classnames=dataset.val_classnames,
+                label_to_expert=val_mapping
+            )
             print("**** Val accuracy: {:.2f}. ****\n".format(acc_val))
     
     if args.save_path is not None:
@@ -138,27 +156,43 @@ def run_lora(args, clip_model, logit_scale, dataset, train_loader, val_loader, t
 
     # evaluate on test sets after training
     if args.lora_variant == 'squared':
-        _set_active_expert(list_lora_layers, active_expert)
+        _set_active_expert(list_lora_layers, None)
 
     if args.setting == "base2new":
         test_base_loader, test_new_loader = test_loader
         
         # evaluation on base classes
+        base_mapping = dataset.label_to_expert_test if args.lora_variant == 'squared' else None
         acc_test_base = evaluate(
-            clip_model, test_base_loader, template=dataset.template[0], classnames=dataset.test_classnames
+            clip_model,
+            test_base_loader,
+            template=dataset.template[0],
+            classnames=dataset.test_classnames,
+            label_to_expert=base_mapping
         )
         print("**** Test-Base accuracy: {:.2f}. ****\n".format(acc_test_base))
 
         # evaluation on novel classes
+        novel_mapping = dataset.label_to_expert_test_new if args.lora_variant == 'squared' else None
         acc_test_novel = evaluate(
-            clip_model, test_new_loader, template=dataset.template[0], classnames=dataset.test_new_classnames
+            clip_model,
+            test_new_loader,
+            template=dataset.template[0],
+            classnames=dataset.test_new_classnames,
+            label_to_expert=novel_mapping,
+            use_expert=False
         )
         print("**** Test-Novel accuracy: {:.2f}. ****\n".format(acc_test_novel))
         result = {"acc_test_base": acc_test_base, "acc_test_new": acc_test_novel}
     
     else:
+        test_mapping = dataset.label_to_expert_test if args.lora_variant == 'squared' else None
         acc_test = evaluate(
-            clip_model, test_loader, template=dataset.template[0], classnames=dataset.test_classnames
+            clip_model,
+            test_loader,
+            template=dataset.template[0],
+            classnames=dataset.test_classnames,
+            label_to_expert=test_mapping
         )
         print("\n**** Final test accuracy (all categories): {:.2f}. ****\n".format(acc_test))
         result = {"acc_test": acc_test}
