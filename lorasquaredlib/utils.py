@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, List, Sequence, Union
+from typing import Iterable, List, Optional, Sequence, Union
 
 import torch
 import torch.nn as nn
@@ -115,7 +115,10 @@ class PlainMultiheadAttentionLoRASquared(nn.Module):
         return layer(tensor)
 
     def set_active_expert(self, expert_index) -> None:
-        self.active_expert = expert_index
+        if isinstance(expert_index, torch.Tensor):
+            self.active_expert = expert_index.detach().cpu()
+        else:
+            self.active_expert = expert_index
 
     def forward(
         self,
@@ -437,3 +440,13 @@ def _validate_indices(indices: List[int], n_experts: int) -> None:
             raise ValueError(
                 f"Expert index {idx} is out of range for {n_experts} experts."
             )
+
+
+def set_active_expert_for_layers(
+    layers: Optional[Iterable[nn.Module]], expert_index
+) -> None:
+    if not layers:
+        return
+    for layer in layers:
+        if hasattr(layer, "set_active_expert"):
+            layer.set_active_expert(expert_index)
