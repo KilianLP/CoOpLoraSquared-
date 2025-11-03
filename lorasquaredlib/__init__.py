@@ -13,6 +13,7 @@ from .utils import (
     mark_only_lorasquared_as_trainable,
     get_lorasquared_parameters,
     resolve_expert_indices,
+    set_active_expert_for_layers,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "mark_only_lorasquared_as_trainable",
     "get_lorasquared_parameters",
     "resolve_expert_indices",
+    "set_active_expert_for_layers",
 ]
