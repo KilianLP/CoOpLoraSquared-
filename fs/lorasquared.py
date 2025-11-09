@@ -15,7 +15,7 @@ def _set_active_expert(layers, expert_selection):
     set_active_expert_for_layers(layers, expert_selection)
 
 
-def _validate_expert_config(args, dataset):
+def _validate_expert_config(args, dataset, n_experts: int):
     if not hasattr(dataset, "label_to_expert_train"):
         raise ValueError(
             "Dataset missing expert metadata for LoRA^2. "
@@ -28,12 +28,14 @@ def _validate_expert_config(args, dataset):
         )
     if args.lora_expert_rank <= 0:
         raise ValueError("LoRA^2 requires --lora_expert_rank > 0.")
-    required_experts = getattr(dataset, "num_experts", None)
-    if required_experts is not None and args.lora_num_experts < required_experts:
+    if n_experts <= 0:
+        raise ValueError("LoRA^2 requires at least one expert.")
+    train_lookup = dataset.label_to_expert_train
+    if train_lookup.max().item() >= n_experts:
         raise ValueError(
-            "LoRA^2 requires at least "
-            f"{required_experts} experts to cover all classes, but got "
-            f"{args.lora_num_experts}."
+            "Number of experts must cover all base (training) classes. "
+            f"Got {n_experts}, but encountered expert id "
+            f"{int(train_lookup.max().item())}."
         )
 
 
@@ -48,6 +50,16 @@ def _experts_for_targets(
     return class_expert_lookup.index_select(0, targets)
 
 
+def _safe_label_map(tensor: torch.Tensor | None, n_experts: int):
+    if tensor is None:
+        return None
+    if tensor.numel() == 0:
+        return None
+    if tensor.max().item() >= n_experts:
+        return None
+    return tensor
+
+
 def run_lorasquared(
     args,
     clip_model,
@@ -58,7 +70,13 @@ def run_lorasquared(
     test_loader,
 ):
     VALIDATION = False
-    _validate_expert_config(args, dataset)
+    base_classnames = getattr(dataset, "classnames", None)
+    if base_classnames is None or len(base_classnames) == 0:
+        raise ValueError(
+            "Dataset must expose `classnames` for the base split to size the expert pool."
+        )
+    n_experts = len(base_classnames)
+    _validate_expert_config(args, dataset, n_experts)
 
     # textual features of the training set
     textual_features = clip_classifier(
@@ -73,7 +91,7 @@ def run_lorasquared(
         params=args.params,
         r_shared=args.lora_shared_rank,
         r_expert=args.lora_expert_rank,
-        n_experts=args.lora_num_experts,
+        n_experts=n_experts,
         alpha_shared=args.alpha,
         alpha_expert=args.alpha,
         dropout_rate=args.dropout_rate,
@@ -179,7 +197,7 @@ def run_lorasquared(
 
         if VALIDATION:
             clip_model.eval()
-            val_mapping = dataset.label_to_expert_val
+            val_mapping = _safe_label_map(dataset.label_to_expert_val, n_experts)
             acc_val = evaluate(
                 clip_model,
                 val_loader,
@@ -197,7 +215,7 @@ def run_lorasquared(
     if args.setting == "base2new":
         test_base_loader, test_new_loader = test_loader
 
-        base_mapping = dataset.label_to_expert_test
+        base_mapping = _safe_label_map(dataset.label_to_expert_test, n_experts)
         acc_test_base = evaluate(
             clip_model,
             test_base_loader,
@@ -219,7 +237,7 @@ def run_lorasquared(
         result = {"acc_test_base": acc_test_base, "acc_test_new": acc_test_novel}
 
     else:
-        test_mapping = dataset.label_to_expert_test
+        test_mapping = _safe_label_map(dataset.label_to_expert_test, n_experts)
         acc_test = evaluate(
             clip_model,
             test_loader,
