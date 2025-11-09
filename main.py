@@ -8,14 +8,15 @@ import numpy as np
 
 # custom imports
 from datasets import build_dataset, build_dataloaders
-from fs import run_cliplora, run_ln_only, run_twostage
+from fs import run_cliplora, run_lorasquared, run_ln_only, run_twostage
 from fs.utils import dump, attach_expert_metadata
 
 # helper message from the '--mode' argument to parse
 MODE_HELPER = "Choose which experiment to run. Choices are:"
-MODE_HELPER += "\t 1. 'cliplora': will run CLIP-LoRA as per https://arxiv.org/abs/2405.18541;"
-MODE_HELPER += "\t 2. 'ln_only': will do FSA by only tuning layer-normalization instances according to --ln_modality and --norm_start;"
-MODE_HELPER += "\t 3. (default) 'twostage': will run 2SFS, and you can customize it with the --peft, --n_iters and --n_iters_frac arguments;"
+MODE_HELPER += "\t 1. 'cliplora': run CLIP-LoRA as per https://arxiv.org/abs/2405.18541;"
+MODE_HELPER += "\t 2. 'lorasquared': run shared+expert LoRA^2 adapters;"
+MODE_HELPER += "\t 3. 'ln_only': do FSA by only tuning layer-normalization instances according to --ln_modality and --norm_start;"
+MODE_HELPER += "\t 4. (default) 'twostage': run 2SFS, customizable via --peft, --n_iters and --n_iters_frac;"
 
 
 def reproducible_setup(seed):
@@ -50,7 +51,7 @@ def get_arguments():
     parser.add_argument('--wd', default=1e-2, type=float)
     
     # experiment config
-    parser.add_argument('--mode', type=str, default='twostage', choices=['cliplora', 'ln_only', 'twostage'],
+    parser.add_argument('--mode', type=str, default='twostage', choices=['cliplora', 'lorasquared', 'ln_only', 'twostage'],
                         help=MODE_HELPER)
     parser.add_argument('--setting', default='standard', type=str, choices=['standard', 'base2new'], 
                         help="Setting for the experiment. Set to 'standard' for all-to-all (train categories = eval categories) or 'base2new' otherwise.")
@@ -86,8 +87,6 @@ def get_arguments():
     parser.add_argument('--dropout_rate', default=0.25, type=float, help='dropout rate applied before the LoRA module')
     parser.add_argument('--save_path', default=None, help='path to save the lora modules after training, not saved if None')
     parser.add_argument('--filename', default='lora_weights', help='file name to save the lora weights (.pt extension will be added)')
-    parser.add_argument('--lora_variant', type=str, default='standard', choices=['standard', 'squared'],
-                        help="Choose between the standard LoRA modules or the shared+expert LoRA^2 adapters.")
     parser.add_argument('--lora_shared_rank', type=int, default=2,
                         help="Rank for the shared branch when using LoRA^2 (ignored otherwise).")
     parser.add_argument('--lora_expert_rank', type=int, default=0,

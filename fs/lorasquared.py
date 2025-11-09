@@ -2,16 +2,53 @@ import clip
 import torch
 import torch.nn.functional as F
 
-from loralib.utils import (
-    mark_only_lora_as_trainable,
-    apply_lora,
-    get_lora_parameters,
-    save_lora,
+from lorasquaredlib import (
+    apply_lorasquared,
+    mark_only_lorasquared_as_trainable,
+    get_lorasquared_parameters,
+    set_active_expert_for_layers,
 )
 from fs.utils.eval_utils import clip_classifier, cls_acc, evaluate
 
 
-def run_lora(
+def _set_active_expert(layers, expert_selection):
+    set_active_expert_for_layers(layers, expert_selection)
+
+
+def _validate_expert_config(args, dataset):
+    if not hasattr(dataset, "label_to_expert_train"):
+        raise ValueError(
+            "Dataset missing expert metadata for LoRA^2. "
+            "Ensure attach_expert_metadata() is called."
+        )
+    if getattr(dataset, "label_to_expert_train", None) is None:
+        raise ValueError(
+            "Dataset does not provide per-class expert assignments. "
+            "Please run attach_expert_metadata(dataset) before training."
+        )
+    if args.lora_expert_rank <= 0:
+        raise ValueError("LoRA^2 requires --lora_expert_rank > 0.")
+    required_experts = getattr(dataset, "num_experts", None)
+    if required_experts is not None and args.lora_num_experts < required_experts:
+        raise ValueError(
+            "LoRA^2 requires at least "
+            f"{required_experts} experts to cover all classes, but got "
+            f"{args.lora_num_experts}."
+        )
+
+
+def _experts_for_targets(
+    targets: torch.Tensor, class_expert_lookup: torch.Tensor
+) -> torch.Tensor:
+    """
+    Map class labels to their assigned expert ids.
+    """
+    if targets.dtype != torch.long:
+        targets = targets.long()
+    return class_expert_lookup.index_select(0, targets)
+
+
+def run_lorasquared(
     args,
     clip_model,
     logit_scale,
@@ -21,18 +58,36 @@ def run_lora(
     test_loader,
 ):
     VALIDATION = False
+    _validate_expert_config(args, dataset)
 
     # textual features of the training set
     textual_features = clip_classifier(
         dataset.classnames, dataset.template, clip_model
     )
 
-    # plug LoRA layers
-    list_lora_layers = apply_lora(args, clip_model, verbose=False)
-    mark_only_lora_as_trainable(clip_model)
-    trainable_params = get_lora_parameters(clip_model)
+    list_lora_layers = apply_lorasquared(
+        clip_model,
+        backbone=args.backbone,
+        encoder=args.encoder,
+        position=args.position,
+        params=args.params,
+        r_shared=args.lora_shared_rank,
+        r_expert=args.lora_expert_rank,
+        n_experts=args.lora_num_experts,
+        alpha_shared=args.alpha,
+        alpha_expert=args.alpha,
+        dropout_rate=args.dropout_rate,
+        verbose=False,
+    )
+    clip_model._lorasquared_layers = list_lora_layers
+    _set_active_expert(list_lora_layers, None)
+    mark_only_lorasquared_as_trainable(clip_model)
+    trainable_params = get_lorasquared_parameters(clip_model)
 
     clip_model = clip_model.cuda().float()
+    class_expert_lookup = dataset.label_to_expert_train.to(
+        clip_model.logit_scale.device
+    )
     total_iters = args.n_iters * args.shots
 
     optimizer = torch.optim.AdamW(
@@ -45,7 +100,6 @@ def run_lora(
         optimizer, total_iters, eta_min=1e-6
     )
 
-    # training LoRA
     scaler = torch.amp.GradScaler("cuda")
     count_iters = 0
 
@@ -65,7 +119,8 @@ def run_lora(
             ]
             images, target = images.cuda(), target.cuda()
 
-            if args.encoder == "text" or args.encoder == "both":
+            if args.encoder in ("text", "both"):
+                _set_active_expert(list_lora_layers, class_expert_lookup)
                 with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
                     tokenized = clip.tokenize(texts).cuda()
                     class_embeddings = clip_model.encode_text(tokenized)
@@ -73,7 +128,12 @@ def run_lora(
                     dim=-1, keepdim=True
                 )
 
-            if args.encoder == "vision" or args.encoder == "both":
+            sample_experts = _experts_for_targets(
+                target, class_expert_lookup
+            )
+            _set_active_expert(list_lora_layers, sample_experts)
+
+            if args.encoder in ("vision", "both"):
                 with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
                     image_features = clip_model.encode_image(images)
             else:
@@ -117,54 +177,55 @@ def run_lora(
                 )
             )
 
-        # Eval
         if VALIDATION:
             clip_model.eval()
+            val_mapping = dataset.label_to_expert_val
             acc_val = evaluate(
                 clip_model,
                 val_loader,
                 template=dataset.template[0],
                 classnames=dataset.val_classnames,
-                label_to_expert=None,
+                label_to_expert=val_mapping,
             )
             print("**** Val accuracy: {:.2f}. ****\n".format(acc_val))
 
     if args.save_path is not None:
-        save_lora(args, list_lora_layers)
+        print("LoRA^2 saving is not implemented yet; skipping serialization.")
 
-    # evaluate on test sets after training
+    _set_active_expert(list_lora_layers, None)
+
     if args.setting == "base2new":
         test_base_loader, test_new_loader = test_loader
 
-        # evaluation on base classes
+        base_mapping = dataset.label_to_expert_test
         acc_test_base = evaluate(
             clip_model,
             test_base_loader,
             template=dataset.template[0],
             classnames=dataset.test_classnames,
-            label_to_expert=None,
+            label_to_expert=base_mapping,
         )
         print("**** Test-Base accuracy: {:.2f}. ****\n".format(acc_test_base))
 
-        # evaluation on novel classes
+        # New classes should rely on the shared adapter only.
         acc_test_novel = evaluate(
             clip_model,
             test_new_loader,
             template=dataset.template[0],
             classnames=dataset.test_new_classnames,
-            label_to_expert=None,
             use_expert=False,
         )
         print("**** Test-Novel accuracy: {:.2f}. ****\n".format(acc_test_novel))
         result = {"acc_test_base": acc_test_base, "acc_test_new": acc_test_novel}
 
     else:
+        test_mapping = dataset.label_to_expert_test
         acc_test = evaluate(
             clip_model,
             test_loader,
             template=dataset.template[0],
             classnames=dataset.test_classnames,
-            label_to_expert=None,
+            label_to_expert=test_mapping,
         )
         print(
             "\n**** Final test accuracy (all categories): {:.2f}. ****\n".format(

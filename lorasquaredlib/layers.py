@@ -1,5 +1,5 @@
 import math
-from typing import Iterable, List, Optional, Sequence, Union
+from typing import Iterable, List, Optional, Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -113,30 +113,54 @@ class LinearLoRASquared(nn.Linear):
             return self.dropout(x)
         return x
 
-    def _normalize_indices(self, expert_index: ExpertSelector) -> List[int]:
+    def _normalize_indices(
+        self,
+        expert_index: ExpertSelector,
+        batch_size: int,
+        device: torch.device,
+    ) -> Tuple[List[int], Optional[torch.Tensor]]:
         if expert_index is None:
-            return []
+            return [], None
 
-        if isinstance(expert_index, int):
-            indices = [expert_index]
-        elif isinstance(expert_index, torch.Tensor):
+        per_sample: Optional[torch.Tensor] = None
+
+        if isinstance(expert_index, torch.Tensor):
             if expert_index.numel() == 1:
                 indices = [int(expert_index.item())]
             else:
-                raise ValueError(
-                    "Per-sample expert selection is not supported; provide a scalar index."
-                )
+                flattened = expert_index.reshape(-1)
+                if flattened.numel() != batch_size:
+                    raise ValueError(
+                        "Per-sample expert selection expects one index for each "
+                        f"of the {batch_size} samples (got {flattened.numel()})."
+                    )
+                per_sample = flattened.detach().to(device=device, dtype=torch.long)
+                self._validate_indices(per_sample.tolist())
+                unique_indices = per_sample.unique(sorted=False).tolist()
+                return unique_indices, per_sample
+        elif isinstance(expert_index, int):
+            indices = [expert_index]
         elif isinstance(expert_index, (list, tuple, set)):
             indices = list(expert_index)
         else:
             indices = list(expert_index)
 
+        self._validate_indices(indices)
+        return indices, per_sample
+
+    def _validate_indices(self, indices: Sequence[int]) -> None:
         for idx in indices:
             if not 0 <= idx < self.n_experts:
                 raise IndexError(
                     f"Expert index {idx} is out of range for {self.n_experts} experts."
                 )
-        return indices
+
+    def _expert_projection(
+        self, dropped: torch.Tensor, idx: int
+    ) -> torch.Tensor:
+        proj = dropped @ self.lora_expert_A[idx].t()
+        proj = proj @ self.lora_expert_B[idx].t()
+        return proj * self.scaling_expert
 
     def _apply_shared(self, dropped: torch.Tensor) -> torch.Tensor:
         if self.r_shared == 0:
@@ -156,14 +180,30 @@ class LinearLoRASquared(nn.Linear):
             )
         update = None
         for idx in indices:
-            proj = dropped @ self.lora_expert_A[idx].t()
-            proj = proj @ self.lora_expert_B[idx].t()
-            proj = proj * self.scaling_expert
+            proj = self._expert_projection(dropped, idx)
             update = proj if update is None else update + proj
         if update is None:
             return torch.zeros(
                 dropped.shape[0], self.out_features, dtype=dropped.dtype, device=dropped.device
             )
+        return update
+
+    def _apply_per_sample_experts(
+        self, dropped: torch.Tensor, routing: torch.Tensor, indices: Sequence[int]
+    ) -> torch.Tensor:
+        if self.r_expert == 0 or routing.numel() == 0 or len(indices) == 0:
+            return torch.zeros(
+                dropped.shape[0], self.out_features, dtype=dropped.dtype, device=dropped.device
+            )
+        update = torch.zeros(
+            dropped.shape[0], self.out_features, dtype=dropped.dtype, device=dropped.device
+        )
+        for idx in indices:
+            mask = routing == idx
+            if not mask.any():
+                continue
+            proj = self._expert_projection(dropped[mask], idx)
+            update[mask] += proj
         return update
 
     def forward(
@@ -172,8 +212,12 @@ class LinearLoRASquared(nn.Linear):
         """
         Args:
             x: Input tensor of shape (batch, in_features).
-            expert_index: Optional expert id or iterable of ids to activate. If None,
-                only the shared LoRA branch is used.
+            expert_index:
+                - ``None``: only the shared LoRA branch is used.
+                - ``int`` or iterable of ints: activate the same experts for every
+                  sample in the batch (their contributions are summed).
+                - 1D ``torch.Tensor`` with ``batch`` entries: select exactly one
+                  expert per sample.
         """
         result = nn.functional.linear(x, self.weight, self.bias)
         dropped = self._drop_input(x)
@@ -181,8 +225,12 @@ class LinearLoRASquared(nn.Linear):
         if self.r_shared > 0:
             result = result + self._apply_shared(dropped)
 
-        indices = self._normalize_indices(expert_index)
-        if indices:
+        indices, routing = self._normalize_indices(
+            expert_index, batch_size=x.shape[0], device=x.device
+        )
+        if routing is not None:
+            result = result + self._apply_per_sample_experts(dropped, routing, indices)
+        elif indices:
             result = result + self._apply_experts(dropped, indices)
 
         return result
