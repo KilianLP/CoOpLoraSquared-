@@ -35,23 +35,27 @@ def build_dataset(dataset, root_path, shots, setting, seed):
 
 def build_dataloaders(args, dataset, preprocess):
     val_loader = build_data_loader(
-        data_source=dataset.val, 
-        batch_size=args.test_batch_size, 
-        is_train=False, 
-        tfm=preprocess, 
-        shuffle=False,  
-        num_workers=args.workers
+        data_source=dataset.val,
+        data_root=args.root_path,
+        batch_size=args.test_batch_size,
+        is_train=False,
+        tfm=preprocess,
+        shuffle=False,
+        num_workers=args.workers,
     )
     test_loader = build_data_loader(
-        data_source=dataset.test, 
-        batch_size=args.test_batch_size, 
-        is_train=False, tfm=preprocess, 
-        shuffle=False,  
-        num_workers=args.workers
+        data_source=dataset.test,
+        data_root=args.root_path,
+        batch_size=args.test_batch_size,
+        is_train=False,
+        tfm=preprocess,
+        shuffle=False,
+        num_workers=args.workers,
     )
     if dataset.test_new is not None:
         test_new_loader = build_data_loader(
             data_source=dataset.test_new, 
+            data_root=args.root_path,
             batch_size=args.test_batch_size, 
             is_train=False, tfm=preprocess, 
             shuffle=False,  
