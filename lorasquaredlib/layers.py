@@ -116,25 +116,22 @@ class LinearLoRASquared(nn.Linear):
     def _normalize_indices(
         self,
         expert_index: ExpertSelector,
-        batch_size: int,
+        batch_shape: Tuple[int, ...],
+        total_items: int,
         device: torch.device,
     ) -> Tuple[List[int], Optional[torch.Tensor]]:
         if expert_index is None:
             return [], None
 
         per_sample: Optional[torch.Tensor] = None
-
         if isinstance(expert_index, torch.Tensor):
-            if expert_index.numel() == 1:
-                indices = [int(expert_index.item())]
+            flattened = expert_index.reshape(-1)
+            if flattened.numel() == 1:
+                indices = [int(flattened.item())]
             else:
-                flattened = expert_index.reshape(-1)
-                if flattened.numel() != batch_size:
-                    raise ValueError(
-                        "Per-sample expert selection expects one index for each "
-                        f"of the {batch_size} samples (got {flattened.numel()})."
-                    )
-                per_sample = flattened.detach().to(device=device, dtype=torch.long)
+                per_sample = self._expand_routing(
+                    flattened, batch_shape, total_items, device
+                )
                 self._validate_indices(per_sample.tolist())
                 unique_indices = per_sample.unique(sorted=False).tolist()
                 return unique_indices, per_sample
@@ -147,6 +144,38 @@ class LinearLoRASquared(nn.Linear):
 
         self._validate_indices(indices)
         return indices, per_sample
+
+    def _expand_routing(
+        self,
+        flattened: torch.Tensor,
+        batch_shape: Tuple[int, ...],
+        total_items: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        flattened = flattened.detach().to(device=device, dtype=torch.long).reshape(-1)
+        if flattened.numel() == total_items:
+            return flattened
+
+        if not batch_shape:
+            raise ValueError("Cannot broadcast expert selection for an empty batch.")
+
+        ndim = len(batch_shape)
+        for axis, axis_size in enumerate(batch_shape):
+            if flattened.numel() != axis_size:
+                continue
+            after = int(math.prod(batch_shape[axis + 1 :])) if axis + 1 < ndim else 1
+            before = int(math.prod(batch_shape[:axis])) if axis > 0 else 1
+            expanded = flattened.repeat_interleave(after)
+            if before > 1:
+                expanded = expanded.repeat(before)
+            if expanded.numel() == total_items:
+                return expanded
+
+        raise ValueError(
+            "Per-sample expert selection expects either one index per element "
+            f"({total_items}) or a size matching one of the batch axes {batch_shape}; "
+            f"got {flattened.numel()}."
+        )
 
     def _validate_indices(self, indices: Sequence[int]) -> None:
         for idx in indices:
@@ -164,9 +193,7 @@ class LinearLoRASquared(nn.Linear):
 
     def _apply_shared(self, dropped: torch.Tensor) -> torch.Tensor:
         if self.r_shared == 0:
-            return torch.zeros(
-                dropped.shape[0], self.out_features, dtype=dropped.dtype, device=dropped.device
-            )
+            return dropped.new_zeros((dropped.shape[0], self.out_features))
         update = dropped @ self.lora_shared_A.t()
         update = update @ self.lora_shared_B.t()
         return update * self.scaling_shared
@@ -175,29 +202,21 @@ class LinearLoRASquared(nn.Linear):
         self, dropped: torch.Tensor, indices: Sequence[int]
     ) -> torch.Tensor:
         if self.r_expert == 0 or len(indices) == 0:
-            return torch.zeros(
-                dropped.shape[0], self.out_features, dtype=dropped.dtype, device=dropped.device
-            )
+            return dropped.new_zeros((dropped.shape[0], self.out_features))
         update = None
         for idx in indices:
             proj = self._expert_projection(dropped, idx)
             update = proj if update is None else update + proj
         if update is None:
-            return torch.zeros(
-                dropped.shape[0], self.out_features, dtype=dropped.dtype, device=dropped.device
-            )
+            return dropped.new_zeros((dropped.shape[0], self.out_features))
         return update
 
     def _apply_per_sample_experts(
         self, dropped: torch.Tensor, routing: torch.Tensor, indices: Sequence[int]
     ) -> torch.Tensor:
         if self.r_expert == 0 or routing.numel() == 0 or len(indices) == 0:
-            return torch.zeros(
-                dropped.shape[0], self.out_features, dtype=dropped.dtype, device=dropped.device
-            )
-        update = torch.zeros(
-            dropped.shape[0], self.out_features, dtype=dropped.dtype, device=dropped.device
-        )
+            return dropped.new_zeros((dropped.shape[0], self.out_features))
+        update = dropped.new_zeros((dropped.shape[0], self.out_features))
         for idx in indices:
             mask = routing == idx
             if not mask.any():
@@ -211,27 +230,38 @@ class LinearLoRASquared(nn.Linear):
     ) -> torch.Tensor:
         """
         Args:
-            x: Input tensor of shape (batch, in_features).
+            x: Input tensor whose last dimension equals ``in_features``.
             expert_index:
                 - ``None``: only the shared LoRA branch is used.
                 - ``int`` or iterable of ints: activate the same experts for every
-                  sample in the batch (their contributions are summed).
-                - 1D ``torch.Tensor`` with ``batch`` entries: select exactly one
-                  expert per sample.
+                  element in the batch (their contributions are summed).
+                - 1D ``torch.Tensor`` whose length matches either the flattened batch
+                  size or any single batch axis: selects one expert per element or
+                  per sample axis, respectively.
         """
         result = nn.functional.linear(x, self.weight, self.bias)
-        dropped = self._drop_input(x)
+        batch_shape = tuple(x.shape[:-1])
+        flat_input = x.reshape(-1, x.shape[-1])
+        dropped = self._drop_input(flat_input)
+        view_shape = batch_shape + (self.out_features,) if batch_shape else (self.out_features,)
 
         if self.r_shared > 0:
-            result = result + self._apply_shared(dropped)
+            shared = self._apply_shared(dropped).view(*view_shape)
+            result = result + shared
 
+        total_items = flat_input.shape[0]
         indices, routing = self._normalize_indices(
-            expert_index, batch_size=x.shape[0], device=x.device
+            expert_index,
+            batch_shape=batch_shape,
+            total_items=total_items,
+            device=x.device,
         )
         if routing is not None:
-            result = result + self._apply_per_sample_experts(dropped, routing, indices)
+            per_sample_update = self._apply_per_sample_experts(dropped, routing, indices)
+            result = result + per_sample_update.view(*view_shape)
         elif indices:
-            result = result + self._apply_experts(dropped, indices)
+            expert_update = self._apply_experts(dropped, indices)
+            result = result + expert_update.view(*view_shape)
 
         return result
 
