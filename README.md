@@ -47,6 +47,6 @@ Results are written to `results/<setting>/<backbone>/<dataset>/shots_<k>/seed_<s
 ## 4. Tips
 - Export `CUBLAS_WORKSPACE_CONFIG=:4096:8` if you keep deterministic CUDA enabled (default in `main.py`).
 - Reduce `--workers` if the dataloader warns about too many worker processes.
+- Combine LoRA² experts at test time with `--lorasquared_base_eval shared|avg_experts` to switch between shared-only or averaged expert routing for base classes.
 - Use `summarize.py` to average multiple seeds after a sweep.
-
 

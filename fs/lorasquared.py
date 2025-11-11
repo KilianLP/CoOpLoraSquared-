@@ -7,6 +7,7 @@ from lorasquaredlib import (
     mark_only_lorasquared_as_trainable,
     get_lorasquared_parameters,
     set_active_expert_for_layers,
+    set_average_expert_mode_for_layers,
 )
 from fs.utils.eval_utils import clip_classifier, cls_acc, evaluate
 
@@ -60,6 +61,14 @@ def _safe_label_map(tensor: torch.Tensor | None, n_experts: int):
     return tensor
 
 
+def _base_eval_config(mode: str, mapping: torch.Tensor | None, n_experts: int):
+    if mode == "shared":
+        return None, False, None, False
+    if mode == "avg_experts":
+        return None, False, list(range(n_experts)), True
+    return _safe_label_map(mapping, n_experts), True, None, False
+
+
 def run_lorasquared(
     args,
     clip_model,
@@ -103,6 +112,7 @@ def run_lorasquared(
     trainable_params = get_lorasquared_parameters(clip_model)
 
     clip_model = clip_model.cuda().float()
+    base_eval_mode = getattr(args, "lorasquared_base_eval", "experts")
     class_expert_lookup = dataset.label_to_expert_train.to(
         clip_model.logit_scale.device
     )
@@ -215,14 +225,22 @@ def run_lorasquared(
     if args.setting == "base2new":
         test_base_loader, test_new_loader = test_loader
 
-        base_mapping = _safe_label_map(dataset.label_to_expert_test, n_experts)
+        base_mapping, base_use_expert, base_override, avg_flag = _base_eval_config(
+            base_eval_mode, dataset.label_to_expert_test, n_experts
+        )
+        if avg_flag:
+            set_average_expert_mode_for_layers(list_lora_layers, True)
         acc_test_base = evaluate(
             clip_model,
             test_base_loader,
             template=dataset.template[0],
             classnames=dataset.test_classnames,
             label_to_expert=base_mapping,
+            use_expert=base_use_expert,
+            expert_override=base_override,
         )
+        if avg_flag:
+            set_average_expert_mode_for_layers(list_lora_layers, False)
         print("**** Test-Base accuracy: {:.2f}. ****\n".format(acc_test_base))
 
         # New classes should rely on the shared adapter only.
@@ -237,14 +255,22 @@ def run_lorasquared(
         result = {"acc_test_base": acc_test_base, "acc_test_new": acc_test_novel}
 
     else:
-        test_mapping = _safe_label_map(dataset.label_to_expert_test, n_experts)
+        test_mapping, test_use_expert, test_override, avg_flag = _base_eval_config(
+            base_eval_mode, dataset.label_to_expert_test, n_experts
+        )
+        if avg_flag:
+            set_average_expert_mode_for_layers(list_lora_layers, True)
         acc_test = evaluate(
             clip_model,
             test_loader,
             template=dataset.template[0],
             classnames=dataset.test_classnames,
             label_to_expert=test_mapping,
+            use_expert=test_use_expert,
+            expert_override=test_override,
         )
+        if avg_flag:
+            set_average_expert_mode_for_layers(list_lora_layers, False)
         print(
             "\n**** Final test accuracy (all categories): {:.2f}. ****\n".format(
                 acc_test

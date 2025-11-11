@@ -14,6 +14,7 @@ from .utils import (
     get_lorasquared_parameters,
     resolve_expert_indices,
     set_active_expert_for_layers,
+    set_average_expert_mode_for_layers,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "get_lorasquared_parameters",
     "resolve_expert_indices",
     "set_active_expert_for_layers",
+    "set_average_expert_mode_for_layers",
 ]

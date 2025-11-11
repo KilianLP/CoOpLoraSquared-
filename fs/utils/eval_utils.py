@@ -73,15 +73,26 @@ def zero_shot_eval(clip_model, dataset, loader, split="test"):
 
 
 @torch.no_grad()
-def evaluate(clip_model, loader, template, classnames, label_to_expert=None, use_expert=True):
+def evaluate(
+    clip_model,
+    loader,
+    template,
+    classnames,
+    label_to_expert=None,
+    use_expert=True,
+    expert_override=None,
+):
     clip_model.eval()
     layers = getattr(clip_model, "_lorasquared_layers", None)
     if layers:
-        if use_expert and label_to_expert is not None:
+        if expert_override is not None:
+            set_active_expert_for_layers(layers, expert_override)
+        elif use_expert and label_to_expert is not None:
             class_expert_ids = label_to_expert.to(clip_model.logit_scale.device)
         else:
             class_expert_ids = None
-        set_active_expert_for_layers(layers, class_expert_ids)
+        if expert_override is None:
+            set_active_expert_for_layers(layers, class_expert_ids)
     texts = tokenize_texts(template, classnames)
     with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
         class_embeddings = clip_model.encode_text(texts)
@@ -91,7 +102,7 @@ def evaluate(clip_model, loader, template, classnames, label_to_expert=None, use
     tot_samples = 0
     for i, (images, target) in enumerate(loader):
         images, target = images.cuda(), target.cuda()
-        if layers and use_expert:
+        if layers and use_expert and expert_override is None:
             if label_to_expert is not None:
                 lut = label_to_expert.to(target.device)
                 batch_expert_ids = lut[target]

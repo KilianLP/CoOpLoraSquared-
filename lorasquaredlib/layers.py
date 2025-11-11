@@ -53,6 +53,7 @@ class LinearLoRASquared(nn.Linear):
         self.alpha_shared = alpha_shared
         self.alpha_expert = alpha_expert
         self.fan_in_fan_out = fan_in_fan_out
+        self.average_expert_mode = False
 
         if self.fan_in_fan_out:
             self.weight.data = self.weight.data.t()
@@ -191,6 +192,9 @@ class LinearLoRASquared(nn.Linear):
         proj = proj @ self.lora_expert_B[idx].t()
         return proj * self.scaling_expert
 
+    def set_average_expert_mode(self, enabled: bool) -> None:
+        self.average_expert_mode = enabled
+
     def _apply_shared(self, dropped: torch.Tensor) -> torch.Tensor:
         if self.r_shared == 0:
             return dropped.new_zeros((dropped.shape[0], self.out_features))
@@ -209,6 +213,8 @@ class LinearLoRASquared(nn.Linear):
             update = proj if update is None else update + proj
         if update is None:
             return dropped.new_zeros((dropped.shape[0], self.out_features))
+        if self.average_expert_mode and len(indices) > 0:
+            update = update / len(indices)
         return update
 
     def _apply_per_sample_experts(

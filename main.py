@@ -97,6 +97,13 @@ def get_arguments():
                         help="Expert id(s) to activate for LoRA^2. Accepts comma-separated indices, 'all', or 'none'.")
     parser.add_argument('--validate', action='store_true',
                         help="Run the validation split after each training epoch.")
+    parser.add_argument(
+        '--lorasquared_base_eval',
+        type=str,
+        default='experts',
+        choices=['experts', 'shared', 'avg_experts'],
+        help="How to route experts when evaluating base classes with LoRA^2.",
+    )
 
     args = parser.parse_args()
     return args

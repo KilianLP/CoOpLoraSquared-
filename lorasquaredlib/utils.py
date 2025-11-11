@@ -120,6 +120,11 @@ class PlainMultiheadAttentionLoRASquared(nn.Module):
         else:
             self.active_expert = expert_index
 
+    def set_average_expert_mode(self, enabled: bool) -> None:
+        for module in (self.q_proj, self.k_proj, self.v_proj, self.proj):
+            if isinstance(module, LinearLoRASquared):
+                module.set_average_expert_mode(enabled)
+
     def forward(
         self,
         query: torch.Tensor,
@@ -450,3 +455,13 @@ def set_active_expert_for_layers(
     for layer in layers:
         if hasattr(layer, "set_active_expert"):
             layer.set_active_expert(expert_index)
+
+
+def set_average_expert_mode_for_layers(
+    layers: Optional[Iterable[nn.Module]], enabled: bool
+) -> None:
+    if not layers:
+        return
+    for layer in layers:
+        if hasattr(layer, "set_average_expert_mode"):
+            layer.set_average_expert_mode(enabled)
