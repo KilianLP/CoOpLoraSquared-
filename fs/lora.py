@@ -20,7 +20,7 @@ def run_lora(
     val_loader,
     test_loader,
 ):
-    VALIDATION = False
+    validate = getattr(args, "validate", False)
 
     # textual features of the training set
     textual_features = clip_classifier(
@@ -118,7 +118,7 @@ def run_lora(
             )
 
         # Eval
-        if VALIDATION:
+        if validate:
             clip_model.eval()
             acc_val = evaluate(
                 clip_model,

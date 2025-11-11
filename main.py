@@ -95,6 +95,8 @@ def get_arguments():
                         help="Number of expert branches to instantiate for LoRA^2 (ignored if expert rank is 0).")
     parser.add_argument('--lora_active_expert', type=str, default=None,
                         help="Expert id(s) to activate for LoRA^2. Accepts comma-separated indices, 'all', or 'none'.")
+    parser.add_argument('--validate', action='store_true',
+                        help="Run the validation split after each training epoch.")
 
     args = parser.parse_args()
     return args

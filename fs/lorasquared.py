@@ -69,7 +69,7 @@ def run_lorasquared(
     val_loader,
     test_loader,
 ):
-    VALIDATION = False
+    validate = getattr(args, "validate", False)
     base_classnames = getattr(dataset, "classnames", None)
     if base_classnames is None or len(base_classnames) == 0:
         raise ValueError(
@@ -195,7 +195,7 @@ def run_lorasquared(
                 )
             )
 
-        if VALIDATION:
+        if validate:
             clip_model.eval()
             val_mapping = _safe_label_map(dataset.label_to_expert_val, n_experts)
             acc_val = evaluate(
