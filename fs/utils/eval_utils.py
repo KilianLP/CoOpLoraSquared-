@@ -134,9 +134,14 @@ def dump(result: dict, args: dict, decimals: int = 4):
 
     args["backbone"] = args["backbone"].replace("/", "-")
     
+    mode_dir = args["mode"]
+    base_eval = args.get("lorasquared_base_eval")
+    if mode_dir == "lorasquared" and base_eval:
+        mode_dir = f"{mode_dir}_{base_eval}"
+
     outpath = osp.join(
         args["results_dir"], args["setting"], args["backbone"], args["dataset"], 
-        f"shots_{args['shots']}", f"seed_{args['seed']}", args['mode'], 
+        f"shots_{args['shots']}", f"seed_{args['seed']}", mode_dir, 
         args["exp_name"]
     )
     if not outpath.endswith(".csv"): outpath += ".csv"
