@@ -1,6 +1,8 @@
 import clip
 import torch
 import torch.nn.functional as F
+import json
+import os
 
 from lorasquaredlib import (
     apply_lorasquared,
@@ -79,6 +81,7 @@ def run_lorasquared(
     test_loader,
 ):
     validate = getattr(args, "validate", False)
+    dynamic_eval = getattr(args, "dynamic_eval", False)
     base_classnames = getattr(dataset, "classnames", None)
     if base_classnames is None or len(base_classnames) == 0:
         raise ValueError(
@@ -113,10 +116,19 @@ def run_lorasquared(
 
     clip_model = clip_model.cuda().float()
     base_eval_mode = getattr(args, "lorasquared_base_eval", "experts")
+    dynamic_eval_enabled = dynamic_eval and base_eval_mode == "shared"
+    if dynamic_eval and not dynamic_eval_enabled:
+        print("Dynamic evaluation is only supported for --lorasquared_base_eval shared; disabling dynamic eval.")
+    dynamic_eval_records = []
     class_expert_lookup = dataset.label_to_expert_train.to(
         clip_model.logit_scale.device
     )
     total_iters = args.n_iters * args.shots
+    if args.setting == "base2new":
+        test_base_loader, test_new_loader = test_loader
+    else:
+        test_base_loader = test_loader
+        test_new_loader = None
 
     optimizer = torch.optim.AdamW(
         trainable_params,
@@ -188,6 +200,46 @@ def run_lorasquared(
 
             count_iters += 1
 
+            if dynamic_eval_enabled:
+                clip_model.eval()
+                if args.setting == "base2new":
+                    acc_test_base = evaluate(
+                        clip_model,
+                        test_base_loader,
+                        template=dataset.template[0],
+                        classnames=dataset.test_classnames,
+                        label_to_expert=None,
+                        use_expert=False,
+                    )
+                    acc_test_novel = evaluate(
+                        clip_model,
+                        test_new_loader,
+                        template=dataset.template[0],
+                        classnames=dataset.test_new_classnames,
+                        label_to_expert=None,
+                        use_expert=False,
+                    )
+                    dynamic_eval_records.append(
+                        {
+                            "iteration": count_iters,
+                            "acc_test_base": acc_test_base,
+                            "acc_test_new": acc_test_novel,
+                        }
+                    )
+                else:
+                    acc_test = evaluate(
+                        clip_model,
+                        test_base_loader,
+                        template=dataset.template[0],
+                        classnames=dataset.test_classnames,
+                        label_to_expert=None,
+                        use_expert=False,
+                    )
+                    dynamic_eval_records.append(
+                        {"iteration": count_iters, "acc_test": acc_test}
+                    )
+                clip_model.train()
+
             if count_iters == total_iters:
                 break
 
@@ -223,8 +275,6 @@ def run_lorasquared(
     _set_active_expert(list_lora_layers, None)
 
     if args.setting == "base2new":
-        test_base_loader, test_new_loader = test_loader
-
         base_mapping, base_use_expert, base_override, avg_flag = _base_eval_config(
             base_eval_mode, dataset.label_to_expert_test, n_experts
         )
@@ -278,4 +328,27 @@ def run_lorasquared(
         )
         result = {"acc_test": acc_test}
 
+    _write_dynamic_eval(args, dynamic_eval_records, base_eval_mode)
     return result
+
+
+def _write_dynamic_eval(args, records, base_eval_mode):
+    if not records:
+        return
+    backbone = args.backbone.replace("/", "-")
+    mode_dir = args.mode
+    if mode_dir == "lorasquared" and base_eval_mode:
+        mode_dir = f"{mode_dir}_{base_eval_mode}"
+    base_dir = os.path.join(
+        args.results_dir,
+        args.setting,
+        backbone,
+        args.dataset,
+        f"shots_{args.shots}",
+        f"seed_{args.seed}",
+        mode_dir,
+    )
+    os.makedirs(base_dir, exist_ok=True)
+    out_path = os.path.join(base_dir, f"{args.exp_name}_dynamic_eval.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(records, f, indent=2)
