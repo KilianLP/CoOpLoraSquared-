@@ -103,7 +103,9 @@ def run_lora(
             count_iters += 1
 
             if dynamic_eval:
+                clip_model.eval()
                 if args.setting == "base2new":
+                    
                     test_base_loader, test_new_loader = test_loader
 
                     # evaluation on base classes
@@ -146,6 +148,7 @@ def run_lora(
                             "acc_test": acc_test,
                         }
                     )
+                clip_model.train()
 
 
             if count_iters == total_iters:
