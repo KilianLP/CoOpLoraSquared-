@@ -104,6 +104,11 @@ def get_arguments():
         choices=['experts', 'shared', 'avg_experts'],
         help="How to route experts when evaluating base classes with LoRA^2.",
     )
+    parser.add_argument(
+        '--dynamic_eval',
+        action='store_true',
+        help="Evaluate on the test splits after each training iteration (LoRA modes only).",
+    )
 
     args = parser.parse_args()
     return args
