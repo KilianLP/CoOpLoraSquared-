@@ -2,6 +2,7 @@ import os
 import clip
 import torch
 import os.path as osp
+import json
 
 from lorasquaredlib import set_active_expert_for_layers
 
@@ -157,3 +158,22 @@ def dump(result: dict, args: dict, decimals: int = 4):
     
     df.to_csv(outpath, index=False)
     print(f"Saved result at {outpath} =)")
+
+def _write_dynamic_eval(args, records):
+    if not records:
+        return
+    backbone = args.backbone.replace("/", "-")
+    mode_dir = args.mode
+    base_dir = os.path.join(
+        args.results_dir,
+        args.setting,
+        backbone,
+        args.dataset,
+        f"shots_{args.shots}",
+        f"seed_{args.seed}",
+        mode_dir,
+    )
+    os.makedirs(base_dir, exist_ok=True)
+    out_path = os.path.join(base_dir, f"{args.exp_name}_dynamic_eval.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(records, f, indent=2)

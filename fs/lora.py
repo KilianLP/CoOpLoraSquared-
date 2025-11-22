@@ -8,7 +8,7 @@ from loralib.utils import (
     get_lora_parameters,
     save_lora,
 )
-from fs.utils.eval_utils import clip_classifier, cls_acc, evaluate
+from fs.utils.eval_utils import _write_dynamic_eval, clip_classifier, cls_acc, evaluate
 
 
 def run_lora(
@@ -21,6 +21,8 @@ def run_lora(
     test_loader,
 ):
     validate = getattr(args, "validate", False)
+    dynamic_eval = getattr(args, "dynamic_eval", False)
+    dynamic_eval_records = []
 
     # textual features of the training set
     textual_features = clip_classifier(
@@ -100,6 +102,52 @@ def run_lora(
 
             count_iters += 1
 
+            if dynamic_eval:
+                if args.setting == "base2new":
+                    test_base_loader, test_new_loader = test_loader
+
+                    # evaluation on base classes
+                    acc_test_base = evaluate(
+                        clip_model,
+                        test_base_loader,
+                        template=dataset.template[0],
+                        classnames=dataset.test_classnames,
+                        label_to_expert=None,
+                    )
+
+                    # evaluation on novel classes
+                    acc_test_novel = evaluate(
+                        clip_model,
+                        test_new_loader,
+                        template=dataset.template[0],
+                        classnames=dataset.test_new_classnames,
+                        label_to_expert=None,
+                        use_expert=False,
+                    )
+                    dynamic_eval_records.append(
+                        {
+                            "iteration": count_iters,
+                            "acc_test_base": acc_test_base,
+                            "acc_test_new": acc_test_novel,
+                        }
+                    )
+
+                else:
+                    acc_test = evaluate(
+                        clip_model,
+                        test_loader,
+                        template=dataset.template[0],
+                        classnames=dataset.test_classnames,
+                        label_to_expert=None,
+                    )
+                    dynamic_eval_records.append(
+                        {
+                            "iteration": count_iters,
+                            "acc_test": acc_test,
+                        }
+                    )
+
+
             if count_iters == total_iters:
                 break
 
@@ -173,4 +221,5 @@ def run_lora(
         )
         result = {"acc_test": acc_test}
 
+    _write_dynamic_eval(args, dynamic_eval_records)
     return result
