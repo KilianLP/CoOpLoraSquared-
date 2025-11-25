@@ -200,7 +200,7 @@ def run_lorasquared(
 
             count_iters += 1
 
-            if dynamic_eval_enabled:
+            if dynamic_eval_enabled and count_iters % 25 == 0:
                 clip_model.eval()
                 if args.setting == "base2new":
                     acc_test_base = evaluate(
