@@ -1,37 +1,90 @@
+import random
+from typing import Dict, Optional
+
 import torch
 import torch.nn as nn
 import clip
 
 
-def attach_expert_metadata(dataset) -> None:
+def attach_expert_metadata(
+    dataset,
+    mode: str = "per_class",
+    num_experts: Optional[int] = None,
+    seed: int = 1,
+) -> None:
     """
-    Build a consistent expert-id mapping across all dataset splits and
-    attach lookup tensors for quick conversion from labels to expert ids.
+    Build expert-id mappings across dataset splits and attach lookup tensors.
+
+    Modes:
+        - per_class (default): one expert per unique class name (previous behavior).
+        - random_balanced: distribute base classes uniformly at random across
+          ``num_experts`` experts (difference of at most one class between experts).
     """
-    seen = {}
-    ordered = []
+    if mode not in {"per_class", "random_balanced"}:
+        raise ValueError(f"Unsupported expert assignment mode: {mode}")
 
-    def register(names):
-        if names is None:
-            return
-        for name in names:
-            if name not in seen:
-                seen[name] = len(ordered)
-                ordered.append(name)
+    base_classes = list(getattr(dataset, "classnames", []) or [])
 
-    register(getattr(dataset, "classnames", None))
-    register(getattr(dataset, "val_classnames", None))
-    register(getattr(dataset, "test_classnames", None))
-    register(getattr(dataset, "test_new_classnames", None))
+    if mode == "random_balanced":
+        if num_experts is None or num_experts <= 0:
+            raise ValueError("random_balanced mode requires num_experts > 0")
+        rng = random.Random(seed)
+        shuffled = base_classes.copy()
+        rng.shuffle(shuffled)
+        per_expert = len(shuffled) // num_experts
+        remainder = len(shuffled) % num_experts
+        classname_to_expert: Dict[str, int] = {}
+        idx = 0
+        for expert_id in range(num_experts):
+            quota = per_expert + (1 if expert_id < remainder else 0)
+            for _ in range(quota):
+                if idx >= len(shuffled):
+                    break
+                classname_to_expert[shuffled[idx]] = expert_id
+                idx += 1
 
-    dataset.classname_to_expert = seen
-    dataset.expert_classnames = ordered
-    dataset.num_experts = len(ordered)
+        def assign_missing(names):
+            if names is None:
+                return
+            for name in names:
+                if name not in classname_to_expert:
+                    classname_to_expert[name] = rng.randrange(num_experts)
+
+        assign_missing(getattr(dataset, "val_classnames", None))
+        assign_missing(getattr(dataset, "test_classnames", None))
+        assign_missing(getattr(dataset, "test_new_classnames", None))
+
+        dataset.num_experts = num_experts
+        dataset.classname_to_expert = classname_to_expert
+        dataset.expert_classnames = list(classname_to_expert.keys())
+
+    else:
+        seen = {}
+        ordered = []
+
+        def register(names):
+            if names is None:
+                return
+            for name in names:
+                if name not in seen:
+                    seen[name] = len(ordered)
+                    ordered.append(name)
+
+        register(getattr(dataset, "classnames", None))
+        register(getattr(dataset, "val_classnames", None))
+        register(getattr(dataset, "test_classnames", None))
+        register(getattr(dataset, "test_new_classnames", None))
+
+        dataset.classname_to_expert = seen
+        dataset.expert_classnames = ordered
+        dataset.num_experts = len(ordered)
 
     def build_tensor(names):
         if names is None:
             return None
-        return torch.tensor([seen[name] for name in names], dtype=torch.long)
+        return torch.tensor(
+            [dataset.classname_to_expert[name] for name in names], dtype=torch.long
+        )
 
     dataset.label_to_expert_train = build_tensor(getattr(dataset, "classnames", None))
     dataset.label_to_expert_val = build_tensor(getattr(dataset, "val_classnames", None))

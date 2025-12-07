@@ -87,7 +87,13 @@ def run_lorasquared(
         raise ValueError(
             "Dataset must expose `classnames` for the base split to size the expert pool."
         )
-    n_experts = len(base_classnames)
+    assignment_mode = getattr(args, "lora_expert_assignment", "per_class")
+    if assignment_mode == "random_balanced":
+        n_experts = args.lora_num_experts
+        if n_experts is None or n_experts <= 0:
+            raise ValueError("random_balanced mode requires --lora_num_experts > 0")
+    else:
+        n_experts = len(base_classnames)
     _validate_expert_config(args, dataset, n_experts)
 
     # textual features of the training set

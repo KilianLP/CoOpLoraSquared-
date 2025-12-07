@@ -87,6 +87,14 @@ def get_arguments():
     parser.add_argument('--dropout_rate', default=0.25, type=float, help='dropout rate applied before the LoRA module')
     parser.add_argument('--save_path', default=None, help='path to save the lora modules after training, not saved if None')
     parser.add_argument('--filename', default='lora_weights', help='file name to save the lora weights (.pt extension will be added)')
+    parser.add_argument(
+        '--lora_expert_assignment',
+        type=str,
+        default='per_class',
+        choices=['per_class', 'random_balanced'],
+        help="How to assign classes to expert adapters: 'per_class' (one per class)"
+        " or 'random_balanced' (spread base classes across a fixed number of experts).",
+    )
     parser.add_argument('--lora_shared_rank', type=int, default=2,
                         help="Rank for the shared branch when using LoRA^2 (ignored otherwise).")
     parser.add_argument('--lora_expert_rank', type=int, default=0,
@@ -131,7 +139,12 @@ def main(args):
         setting=args.setting,
         seed=args.seed
     )
-    attach_expert_metadata(dataset)
+    attach_expert_metadata(
+        dataset,
+        mode=args.lora_expert_assignment,
+        num_experts=args.lora_num_experts if args.lora_expert_assignment != 'per_class' else None,
+        seed=args.seed,
+    )
 
     # create the dataloaders
     # NOTE: test_loader will be a tuple with both test_base and test_new loaders if we're evaluating the b2n setup
