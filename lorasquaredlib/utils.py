@@ -370,6 +370,77 @@ def get_lorasquared_parameters(
     return params
 
 
+def _extract_linear_lorasq_weights(linear: nn.Module) -> dict:
+    """Return a serializable dict for a LinearLoRASquared module."""
+    if not isinstance(linear, LinearLoRASquared):
+        return {}
+    return {
+        "lora_shared_A": linear.lora_shared_A.detach().cpu() if linear.lora_shared_A is not None else None,
+        "lora_shared_B": linear.lora_shared_B.detach().cpu() if linear.lora_shared_B is not None else None,
+        "lora_expert_A": [p.detach().cpu() for p in linear.lora_expert_A],
+        "lora_expert_B": [p.detach().cpu() for p in linear.lora_expert_B],
+        "r_shared": linear.r_shared,
+        "r_expert": linear.r_expert,
+        "n_experts": linear.n_experts,
+        "alpha_shared": linear.alpha_shared,
+        "alpha_expert": linear.alpha_expert,
+        "fan_in_fan_out": linear.fan_in_fan_out,
+    }
+
+
+def save_lorasquared(args, layers: Iterable[nn.Module]) -> str:
+    """
+    Persist LoRA^2 adapter weights for later reuse.
+
+    Args:
+        args: CLI args (expects backbone, dataset, shots, seed, params, save_path, filename).
+        layers: list returned by apply_lorasquared.
+
+    Returns:
+        Full path to the saved .pt file.
+    """
+
+    weights = {}
+    for idx, layer in enumerate(layers):
+        layer_weights = {}
+        for pname, attr in ("q", "q_proj"), ("k", "k_proj"), ("v", "v_proj"), ("o", "proj"):
+            if pname not in args.params:
+                continue
+            sub = getattr(layer, attr, None)
+            extracted = _extract_linear_lorasq_weights(sub)
+            if extracted:
+                layer_weights[pname] = extracted
+        weights[f"layer_{idx}"] = layer_weights
+
+    metadata = {
+        "r_shared": args.lora_shared_rank,
+        "r_expert": args.lora_expert_rank,
+        "alpha": args.alpha,
+        "encoder": args.encoder,
+        "params": args.params,
+        "position": args.position,
+        "backbone": args.backbone,
+        "dataset": args.dataset,
+        "shots": args.shots,
+        "seed": args.seed,
+    }
+
+    backbone = args.backbone.replace("/", "").replace("-", "").lower()
+    save_dir = os.path.join(
+        args.save_path,
+        backbone,
+        args.dataset,
+        f"{args.shots}shots",
+        f"seed{args.seed}",
+    )
+    os.makedirs(save_dir, exist_ok=True)
+    filename = getattr(args, "filename", "lora_weights")
+    save_path = os.path.join(save_dir, f"{filename}.pt")
+    torch.save({"weights": weights, "metadata": metadata}, save_path)
+    print(f"LoRA^2 weights saved to {save_path}")
+    return save_path
+
+
 def resolve_expert_indices(
     expert_value: Union[str, int, Iterable[int], torch.Tensor, None],
     n_experts: int,

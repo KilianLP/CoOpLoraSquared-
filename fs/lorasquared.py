@@ -10,6 +10,7 @@ from lorasquaredlib import (
     get_lorasquared_parameters,
     set_active_expert_for_layers,
     set_average_expert_mode_for_layers,
+    save_lorasquared,
 )
 from fs.utils.eval_utils import clip_classifier, cls_acc, evaluate
 
@@ -276,7 +277,7 @@ def run_lorasquared(
             print("**** Val accuracy: {:.2f}. ****\n".format(acc_val))
 
     if args.save_path is not None:
-        print("LoRA^2 saving is not implemented yet; skipping serialization.")
+        save_lorasquared(args, list_lora_layers)
 
     _set_active_expert(list_lora_layers, None)
 
