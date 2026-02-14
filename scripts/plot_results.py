@@ -68,6 +68,23 @@ def parse_args() -> argparse.Namespace:
         help="Experiment label substrings used to group CSVs.",
     )
     parser.add_argument(
+        "--auto_label",
+        action="store_true",
+        help="Infer method labels from filename using --label_regex and --label_format instead of --experiments.",
+    )
+    parser.add_argument(
+        "--label_regex",
+        type=str,
+        default=r"lorasquared_(?P<dataset>[^_]+).*?(?P<exp>exp\\d+).*?_shared(?P<shared>\\d+)_expert(?P<expert>\\d+)",
+        help="Regex used to extract fields from filename when --auto_label is set.",
+    )
+    parser.add_argument(
+        "--label_format",
+        type=str,
+        default="{exp}_s{shared}_e{expert}",
+        help="Python format string fed with regex groupdict keys to build method labels when --auto_label is set.",
+    )
+    parser.add_argument(
         "--datasets",
         type=str,
         default=None,
@@ -122,6 +139,24 @@ def group_by_experiment(files: Sequence[str], experiments: Sequence[str]) -> Dic
                 break
     for exp, flist in groups.items():
         print(f"{exp}: {len(flist)} files")
+    return groups
+
+
+def group_by_regex(files: Sequence[str], pattern: str, fmt: str) -> Dict[str, List[str]]:
+    import re
+
+    regex = re.compile(pattern, re.IGNORECASE)
+    groups: Dict[str, List[str]] = {}
+    for f in files:
+        fname = os.path.basename(f)
+        m = regex.search(fname)
+        if not m:
+            print(f"[skip] filename did not match regex: {fname}")
+            continue
+        label = fmt.format(**m.groupdict())
+        groups.setdefault(label, []).append(f)
+    for label, flist in groups.items():
+        print(f"{label}: {len(flist)} files")
     return groups
 
 
@@ -201,7 +236,10 @@ def main():
     datasets = [d.strip() for d in args.datasets.split(",")] if args.datasets else DEFAULT_DATASETS
 
     files = find_csvs(args.root, args.pattern)
-    groups = group_by_experiment(files, args.experiments)
+    if args.auto_label:
+        groups = group_by_regex(files, args.label_regex, args.label_format)
+    else:
+        groups = group_by_experiment(files, args.experiments)
 
     exp_vals: Dict[str, List[float | None]] = {}
     for exp, flist in groups.items():
@@ -214,7 +252,8 @@ def main():
     columns.extend([nan_array(vals) for vals in exp_vals.values()])
 
     if not columns:
-        raise SystemExit("No data to plot.")
+        print("No matching CSV files found; skipping plotting.")
+        return
 
     matrix = np.vstack(columns).T  # shape: datasets x methods
     outdir = Path(args.outdir)
