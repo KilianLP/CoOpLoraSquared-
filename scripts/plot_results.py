@@ -75,8 +75,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--label_regex",
         type=str,
-        default=r"lorasquared_(?P<dataset>[^_]+).*?(?P<exp>exp\\d+).*?_shared(?P<shared>\\d+)_expert(?P<expert>\\d+)",
-        help="Regex used to extract fields from filename when --auto_label is set.",
+        default=r"lorasquared_(?P<dataset>.+?)_.*?(?P<exp>exp\\d+).*?shared(?P<shared>\\d+)_expert(?P<expert>\\d+)",
+        help="Regex used to extract fields from filename when --auto_label is set. Override if your naming differs.",
     )
     parser.add_argument(
         "--label_format",
