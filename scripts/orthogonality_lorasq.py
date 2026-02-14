@@ -11,10 +11,12 @@ Outputs (written to --outdir, default plots_ortho):
 - ortho_metrics.csv : per-(file,layer,proj,expert) cosine similarities.
 - mean_overall.txt   : single overall mean cosine.
 - Plots:
-  * cosine_vs_depth.png : mean±std over layers (averaged across files/projs/experts).
-  * cosine_by_projection.png : boxplot by projection (q/k/v/o).
-  * heatmap_layer_expert.png : heatmap of mean cosine (layer index x expert id).
-  * cosine_by_dataset.png : bar of mean cosine per dataset (if dataset inferred).
+  * cosine_vs_depth.png          : mean±std over layers (averaged across files/projs/experts).
+  * cosine_by_projection.png     : boxplot by projection (q/k/v/o).
+  * heatmap_layer_expert.png     : heatmap of mean cosine (layer index x expert id).
+  * cosine_by_dataset.png        : bar of mean cosine per dataset (if dataset inferred).
+  * cosine_by_r_shared.png       : boxplot grouped by shared rank (if metadata present).
+  * cosine_by_r_expert.png       : boxplot grouped by expert rank (if metadata present).
 
 Usage:
   python scripts/orthogonality_lorasq.py \
@@ -58,7 +60,15 @@ def parse_args() -> argparse.Namespace:
 def infer_metadata(path: str) -> Dict[str, Optional[str]]:
     parts = Path(path).parts
     # Expect .../<root>/<backbone>/<dataset>/<shots>shots/seed<seed>/<file>.pt
-    meta = {"backbone": None, "dataset": None, "shots": None, "seed": None, "file": Path(path).name}
+    meta = {
+        "backbone": None,
+        "dataset": None,
+        "shots": None,
+        "seed": None,
+        "file": Path(path).name,
+        "r_shared": None,
+        "r_expert": None,
+    }
     try:
         meta["backbone"] = parts[-5]
         meta["dataset"] = parts[-4]
@@ -190,6 +200,21 @@ def plot_by_dataset(df: pd.DataFrame, outdir: Path):
     print(f"Saved {out}")
 
 
+def plot_by_rank(df: pd.DataFrame, outdir: Path, rank_col: str, filename: str, title: str):
+    if rank_col not in df.columns or df[rank_col].isna().all():
+        return
+    plt.figure(figsize=(6, 4))
+    df.boxplot(column="cosine", by=rank_col)
+    plt.suptitle("")
+    plt.title(title)
+    plt.ylabel("Cosine")
+    out = outdir / filename
+    plt.tight_layout()
+    plt.savefig(out, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"Saved {out}")
+
+
 def main():
     args = parse_args()
     outdir = Path(args.outdir)
@@ -208,6 +233,9 @@ def main():
             print(f"[skip] failed to load {path}: {e}")
             continue
         meta = infer_metadata(path)
+        ckpt_meta = ckpt.get("metadata", {})
+        meta["r_shared"] = ckpt_meta.get("r_shared", meta.get("r_shared"))
+        meta["r_expert"] = ckpt_meta.get("r_expert", meta.get("r_expert"))
         recs = extract_cosines(ckpt, args.proj_filter)
         for r in recs:
             r.update(meta)
@@ -232,6 +260,8 @@ def main():
     plot_by_projection(df, outdir)
     plot_heatmap_layer_expert(df, outdir)
     plot_by_dataset(df, outdir)
+    plot_by_rank(df, outdir, "r_shared", "cosine_by_r_shared.png", "Cosine by shared rank")
+    plot_by_rank(df, outdir, "r_expert", "cosine_by_r_expert.png", "Cosine by expert rank")
 
 
 if __name__ == "__main__":
