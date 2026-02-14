@@ -95,7 +95,14 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="acc_test_new",
         choices=["acc_test_new", "acc_test_base", "acc_test"],
-        help="Metric column to read from each CSV.",
+        help="(Deprecated) Single metric to read. Use --metrics for multiple.",
+    )
+    parser.add_argument(
+        "--metrics",
+        nargs="+",
+        default=None,
+        choices=["acc_test_new", "acc_test_base", "acc_test"],
+        help="One or more metrics to plot (e.g., acc_test_new acc_test_base).",
     )
     parser.add_argument("--outdir", type=str, default="plots", help="Where to write plots and summary CSV.")
     parser.add_argument(
@@ -234,6 +241,7 @@ def write_summary(datasets: Sequence[str], methods: Sequence[str], matrix: np.nd
 def main():
     args = parse_args()
     datasets = [d.strip() for d in args.datasets.split(",")] if args.datasets else DEFAULT_DATASETS
+    metrics = args.metrics if args.metrics else [args.metric]
 
     files = find_csvs(args.root, args.pattern)
     if args.auto_label:
@@ -241,27 +249,33 @@ def main():
     else:
         groups = group_by_experiment(files, args.experiments)
 
-    exp_vals: Dict[str, List[float | None]] = {}
-    for exp, flist in groups.items():
-        exp_vals[exp] = values_for_datasets(flist, datasets, args.metric)
-
     baselines = parse_baselines(args.baseline, len(datasets)) if args.baseline else {}
 
-    methods = list(baselines.keys()) + list(exp_vals.keys())
-    columns: List[np.ndarray] = [nan_array(baselines[name]) for name in baselines]
-    columns.extend([nan_array(vals) for vals in exp_vals.values()])
-
-    if not columns:
-        print("No matching CSV files found; skipping plotting.")
-        return
-
-    matrix = np.vstack(columns).T  # shape: datasets x methods
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    plot_grouped(datasets, methods, matrix, outdir, args.metric)
-    means = plot_means(methods, matrix, outdir, args.metric)
-    write_summary(datasets, methods, matrix, means, outdir, args.metric)
+    found_any = False
+    for metric in metrics:
+        exp_vals: Dict[str, List[float | None]] = {}
+        for exp, flist in groups.items():
+            exp_vals[exp] = values_for_datasets(flist, datasets, metric)
+
+        methods = list(baselines.keys()) + list(exp_vals.keys())
+        columns: List[np.ndarray] = [nan_array(baselines[name]) for name in baselines]
+        columns.extend([nan_array(vals) for vals in exp_vals.values()])
+
+        if not columns:
+            print(f"No matching CSV files found for metric '{metric}'; skipping.")
+            continue
+
+        matrix = np.vstack(columns).T  # shape: datasets x methods
+        plot_grouped(datasets, methods, matrix, outdir, metric)
+        means = plot_means(methods, matrix, outdir, metric)
+        write_summary(datasets, methods, matrix, means, outdir, metric)
+        found_any = True
+
+    if not found_any:
+        print("No matching CSV files found for any metric; nothing plotted.")
 
 
 if __name__ == "__main__":
