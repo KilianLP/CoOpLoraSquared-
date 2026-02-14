@@ -168,17 +168,16 @@ def plot_by_projection(df: pd.DataFrame, outdir: Path):
     print(f"Saved {out}")
 
 
-def plot_heatmap_layer_expert(df: pd.DataFrame, outdir: Path):
-    if not {"layer", "expert"}.issubset(df.columns):
+def plot_mean_over_experts(df: pd.DataFrame, outdir: Path):
+    if "layer" not in df.columns:
         return
-    pivot = df.pivot_table(index="layer", columns="expert", values="cosine", aggfunc="mean")
-    plt.figure(figsize=(8, 6))
-    plt.imshow(pivot, aspect="auto", cmap="viridis")
-    plt.colorbar(label="Mean cosine")
-    plt.xlabel("Expert id")
-    plt.ylabel("Layer index")
-    plt.title("Mean cosine per layer/expert")
-    out = outdir / "heatmap_layer_expert.png"
+    grouped = df.groupby("layer")["cosine"].mean()
+    plt.figure(figsize=(8, 4))
+    plt.plot(grouped.index, grouped.values, marker="o")
+    plt.xlabel("Layer index")
+    plt.ylabel("Mean cosine across experts")
+    plt.title("Shared vs Expert similarity (experts averaged)")
+    out = outdir / "cosine_vs_depth_mean_experts.png"
     plt.tight_layout()
     plt.savefig(out, dpi=300, bbox_inches="tight")
     plt.close()
@@ -258,7 +257,7 @@ def main():
 
     plot_cosine_vs_depth(df, outdir)
     plot_by_projection(df, outdir)
-    plot_heatmap_layer_expert(df, outdir)
+    plot_mean_over_experts(df, outdir)
     plot_by_dataset(df, outdir)
     plot_by_rank(df, outdir, "r_shared", "cosine_by_r_shared.png", "Cosine by shared rank")
     plot_by_rank(df, outdir, "r_expert", "cosine_by_r_expert.png", "Cosine by expert rank")
